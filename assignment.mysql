@@ -1,0 +1,108 @@
+import pandas as pd
+import sqlite3
+
+#Load CSVs into DataFrames
+
+aws_path = "./aws_line_items_12mo.csv"
+gcp_path = "./gcp_billing_12mo.csv"
+
+aws = pd.read_csv(aws_path)
+gcp = pd.read_csv(gcp_path)
+
+#Create SQLite in-memory database
+
+conn = sqlite3.connect(":memory:")
+cursor = conn.cursor()
+
+# Load DataFrames into SQL tables (aws_raw, gcp_raw)
+
+aws.to_sql("aws_raw", conn, if_exists="replace", index=False)
+gcp.to_sql("gcp_raw", conn, if_exists="replace", index=False)
+
+print("Tables loaded: aws_raw, gcp_raw")
+
+# Create Unified Multi-Cloud Table Using SQL
+
+create_unified_sql = """
+CREATE TABLE unified_cloud_billing AS
+SELECT
+    date AS usage_date,
+    'AWS' AS cloud_provider,
+    account_id AS account_or_project_id,
+    service,
+    team,
+    env,
+    cost_usd
+FROM aws_raw
+
+UNION ALL
+
+SELECT
+    date AS usage_date,
+    'GCP' AS cloud_provider,
+    project_id AS account_or_project_id,
+    service,
+    team,
+    env,
+    cost_usd
+FROM gcp_raw;
+"""
+
+cursor.execute("DROP TABLE IF EXISTS unified_cloud_billing;")
+cursor.execute(create_unified_sql)
+
+print("Unified table created!")
+
+
+# Monthly Spend by Cloud Provider
+
+monthly_by_provider_sql = """
+SELECT
+    substr(usage_date, 1, 7) AS month,
+    cloud_provider,
+    SUM(cost_usd) AS total_cost_usd
+FROM unified_cloud_billing
+GROUP BY month, cloud_provider
+ORDER BY month, cloud_provider;
+"""
+
+monthly_by_provider = pd.read_sql(monthly_by_provider_sql, conn)
+print("\n=== Monthly Spend by Cloud Provider ===")
+print(monthly_by_provider)
+
+
+
+# Monthly Spend by Team & Environment
+
+monthly_by_team_env_sql = """
+SELECT
+    substr(usage_date, 1, 7) AS month,
+    team,
+    env,
+    SUM(cost_usd) AS total_cost_usd
+FROM unified_cloud_billing
+GROUP BY month, team, env
+ORDER BY month, team, env;
+"""
+
+monthly_by_team_env = pd.read_sql(monthly_by_team_env_sql, conn)
+print("\n=== Monthly Spend by Team & Environment ===")
+print(monthly_by_team_env.head())
+
+
+# Query: Top 5 Most Expensive Services
+
+top5_services_sql = """
+SELECT
+    service,
+    SUM(cost_usd) AS total_cost_usd
+FROM unified_cloud_billing
+GROUP BY service
+ORDER BY total_cost_usd DESC
+LIMIT 5;
+"""
+
+top5_services = pd.read_sql(top5_services_sql, conn)
+print("\n=== Top 5 Most Expensive Services ===")
+print(top5_services)
+
